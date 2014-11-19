@@ -10,6 +10,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "inc/hw_types.h"
 #include "inc/hw_gpio.h"
@@ -26,7 +27,7 @@
 
 struct i2c_command {
 	char message[4096];
-	uint8_t address;
+	uint8_t address;		// stores the 7 bit address and the read/write bit
 	uint8_t data[256];
 	uint8_t data_index;
 	//TODO: add more fields for receiving
@@ -127,8 +128,9 @@ void InitI2C0(bool high_speed) {
 	HWREG(I2C0_BASE + I2C_O_FIFOCTL) = 80008000;
 }
 
-void writeI2C0(uint8_t device_address, uint8_t device_data[], uint16_t data_size) {
-	if (data_size < 1){
+void writeI2C0(uint8_t device_address, uint8_t device_data[],
+		uint16_t data_size) {
+	if (data_size < 1) {
 		return;
 	}
 
@@ -144,15 +146,13 @@ void writeI2C0(uint8_t device_address, uint8_t device_data[], uint16_t data_size
 		I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
 
 		//wait for MCU to finish transaction
-		while (I2CMasterBusy(I2C0_BASE))
-			;
+		while (I2CMasterBusy(I2C0_BASE)){}
 
 		uint16_t i;
 		for (i = 1; i < data_size - 1; i++) {
 			I2CMasterDataPut(I2C0_BASE, device_data[i]);
 			I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_CONT);
-			while (I2CMasterBusy(I2C0_BASE))
-				;
+			while (I2CMasterBusy(I2C0_BASE)){}
 		}
 
 		I2CMasterDataPut(I2C0_BASE, device_data[data_size - 1]);
@@ -161,7 +161,22 @@ void writeI2C0(uint8_t device_address, uint8_t device_data[], uint16_t data_size
 	}
 
 	//wait for MCU & device to complete transaction
-	while (I2CMasterBusy(I2C0_BASE));
+	while (I2CMasterBusy(I2C0_BASE)){}
+}
+
+uint8_t readI2C0(uint8_t device_address) {
+	//specify that we want to communicate to device address with an intended read from bus
+	I2CMasterSlaveAddrSet(I2C0_BASE, device_address, true);
+
+	//send control byte and read from the register we
+	//specified
+	I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE);
+
+	//wait for MCU to finish transaction
+	while (I2CMasterBusy(I2C0_BASE)){}
+
+	//return data pulled from the specified register
+	return I2CMasterDataGet(I2C0_BASE);
 }
 
 int find_start_bit(struct i2c_command* command, char** index) {
@@ -176,20 +191,33 @@ int find_start_bit(struct i2c_command* command, char** index) {
 int find_address(struct i2c_command* command, char** index) {
 	char* p = strtok(*index, " ");
 	if (p != NULL) {
+		// the tokenizer includes the stop char ']' in the last token
+		// if it's there, set the next char to ']' and insert a null char in between
+		*index = strchr(p, ']');
+		if (*index != NULL) {
+			**index = '\0';
+			(*index)++;
+			**index = ']';
+		}
+
 		strcat(command->message, "ADDR: ");
 		strcat(command->message, p);
 
 		command->address = strtoul(p, NULL, 0);
 
-		// move index to the null character inserted by strtok, + 1
-		*index = strchr(*index, '\0') + 1;
 		return ok;
 	}
+
 	strcat(command->message, " No Address byte");
 	return fail;
 }
 
 int find_data(struct i2c_command* command, char** index) {
+	if (command->address & 0x01) {
+		// read so skip data bytes
+		return ok;
+	}
+
 	char* tok = strtok(*index, " ");
 	char* next_tok;
 
@@ -229,18 +257,21 @@ int find_data(struct i2c_command* command, char** index) {
 
 int find_stop_bit(struct i2c_command* command, char** index) {
 	if (**index == ']') {
-			return ok;
-		}
-		strcat(command->message, " No stop bit");
-		return fail;
+		return ok;
+	}
+	strcat(command->message, " No stop bit");
+	return fail;
 }
 
 int i2c_execute(struct i2c_command* command, char** index) {
 	// if lsb of address is 0, write to slave, else read
 	if (command->address & 0x01) {
 		// read
-		//TODO: read
-		return fail;
+		uint8_t data = readI2C0(command->address >> 1);
+		char temp[25];
+		sprintf(temp, "\nReceived Data: 0x%x", data);
+		strcat(command->message, temp);
+		return ok;
 	} else {
 		// write
 		// right shift to get rid of read/write bit (7 bit address)

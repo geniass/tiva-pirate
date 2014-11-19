@@ -21,5 +21,6 @@ char* parse_i2c_command(char* command);
 void InitI2C0(bool high_speed);
 
 void writeI2C0(uint8_t device_address, uint8_t device_data[], uint16_t data_size);
+uint8_t readI2C0(uint8_t device_address);
 
 #endif /* I2C_H_ */
