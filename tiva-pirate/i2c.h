@@ -22,5 +22,6 @@ void InitI2C0(bool high_speed);
 
 void writeI2C0(uint8_t device_address, uint8_t device_data[], uint16_t data_size);
 uint8_t readI2C0(uint8_t device_address);
+uint8_t scanI2C0();
 
 #endif /* I2C_H_ */

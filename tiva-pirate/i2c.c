@@ -55,7 +55,7 @@ enum state_codes {
 	start_bit, address, data, stop_bit, execute, end, error
 };
 enum ret_codes {
-	ok, fail, repeat
+	ok, fail, repeat, scan
 };
 
 struct transition {
@@ -70,6 +70,7 @@ struct transition {
 static const struct transition state_transitions[] = {
 		{ ENTRY, ok, address },
 		{ ENTRY, repeat, ENTRY },
+		{ ENTRY, scan, execute},
 		{ address, ok,	data },
 		{ data, ok,	stop_bit },
 		{ data, repeat, data },
@@ -179,11 +180,60 @@ uint8_t readI2C0(uint8_t device_address) {
 	return I2CMasterDataGet(I2C0_BASE);
 }
 
+uint8_t scanI2C0(struct i2c_command* command) {
+	unsigned char ucProbeAdress;
+	unsigned long ucerrorstate;
+
+	strcat(command->message, "\nStarting I2C bus scan...\n");
+
+	while (I2CMasterBusy(I2C0_BASE)) {
+	}
+
+	// I2C Addresses are 7-bit values
+	// probe the address range of 0 to 127 to find I2C slave devices on the bus
+	for (ucProbeAdress = 0; ucProbeAdress < 127; ucProbeAdress++) {
+		ROM_I2CMasterSlaveAddrSet(I2C0_BASE, ucProbeAdress, false);
+
+		ROM_I2CMasterDataPut(I2C0_BASE, 0x00);
+
+		// Initiate send of data from the master.
+		ROM_I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
+		while (I2CMasterBusy(I2C0_BASE)) {
+		}
+
+		ucerrorstate = ROM_I2CMasterErr(I2C0_BASE);
+
+		// Examining the content I2C Master Control/Status (I2CMCS) Register
+		// to see if the ADRACK-Bit (Acknowledge Address) is TRUE (1)
+		// ( 1: The transmitted address was not acknowledged by the slave)
+		if (ucerrorstate & I2C_MASTER_ERR_ADDR_ACK) {
+			// device at selected address did not acknowledge --> there's no device
+			// with this address present on the I2C bus
+		} else {
+			// device at selected address acknowledged --> there is a device
+			// with this address present on the I2C bus
+			char temp[30];
+			snprintf(temp, 30, "Address found: 0x%2x\n", ucProbeAdress);
+			strcat(command->message, temp);
+		}
+	}
+
+	ROM_I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH);
+
+	strcat(command->message, "\nI2C Bus scan finished");
+
+	return 0;
+}
+
 int find_start_bit(struct i2c_command* command, char** index) {
 	if (**index == '[') {
 		++(*index);
 		return ok;
+	} else if (strstr(*index, "scan")){
+		// no start bit because user requested an I2C bus scan
+		return scan;
 	}
+
 	strcat(command->message, "No start bit");
 	return fail;
 }
@@ -264,6 +314,12 @@ int find_stop_bit(struct i2c_command* command, char** index) {
 }
 
 int i2c_execute(struct i2c_command* command, char** index) {
+	//TODO: move this to its own state
+	if (strstr(*index, "scan")) {
+		scanI2C0(command);
+		return ok;
+	}
+
 	// if lsb of address is 0, write to slave, else read
 	if (command->address & 0x01) {
 		// read
